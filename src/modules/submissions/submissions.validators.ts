@@ -1,10 +1,31 @@
 import { z } from 'zod';
 
-/** Decimal string ("12,5" yoki "12.5") yoki number */
-const decimalInput = z.union([z.string(), z.number()]).optional();
+/**
+ * Ixtiyoriy matn — null/undefined ni bir xil ko'radi.
+ * Eski frontend bo'sh maydonlarni `null` qilib yuborishi mumkin; strict
+ * `z.string()` esa null ni rad etib, butun submissionni "noto'g'ri" qiladi.
+ * Shu sabab null/undefined → default qiymatga aylantiriladi.
+ */
+const optionalText = (def = '') =>
+  z.preprocess((v) => (v == null ? undefined : v), z.string().optional().default(def));
+
+/** Decimal string ("12,5" yoki "12.5") yoki number — null/bo'sh ham qabul */
+const decimalInput = z.preprocess(
+  (v) => (v == null || v === '' ? undefined : v),
+  z.union([z.string(), z.number()]).optional(),
+);
+
+/** Raqam yoki matn (zagranitsa kabi) — null/bo'sh ham qabul */
+const numberOrText = z.preprocess(
+  (v) => (v == null || v === '' ? undefined : v),
+  z.union([z.string(), z.number()]).optional(),
+);
 
 /** ISO sana — frontenddan test rejimida kelishi mumkin */
-const dateISOSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional();
+const dateISOSchema = z.preprocess(
+  (v) => (v == null || v === '' ? undefined : v),
+  z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+);
 
 // ─── Lokomotiv ────────────────────────────────────────────────────
 export const lokomotivCreateSchema = z.object({
@@ -15,23 +36,23 @@ export const lokomotivCreateSchema = z.object({
   rusumi: z.string().min(1),
   lokomotivNumber: z.string().min(1),
 
-  poyezdNumber: z.string().optional().default(''),
-  ruxsatIndeksi: z.string().optional().default(''),
+  poyezdNumber: optionalText(),
+  ruxsatIndeksi: optionalText(),
   poyezdVazni: decimalInput,
 
   qoldiq: decimalInput,
   qanchaBerildi: decimalInput,
   dizMasla: decimalInput,
 
-  stansiya: z.string().optional().default(''),
-  tashkilot: z.string().optional().default(''),
-  ijarachi: z.string().optional().default(''),
+  stansiya: optionalText(),
+  tashkilot: optionalText(),
+  ijarachi: optionalText(),
   // Frontend zagranitsa'ni raqam yoki matn qilib yuborishi mumkin
-  zagranitsa: z.union([z.string(), z.number()]).optional(),
-  jadval: z.string().optional().default(''),
+  zagranitsa: numberOrText,
+  jadval: optionalText(),
 
-  mashinadaYetkazildi: z.boolean().optional().default(false),
-  mashinaRaqami: z.string().optional().default(''),
+  mashinadaYetkazildi: z.preprocess((v) => v ?? false, z.boolean()).default(false),
+  mashinaRaqami: optionalText(),
 
   reportDateISO: dateISOSchema, // test rejim uchun
 });
@@ -41,19 +62,19 @@ export const korxonaCreateSchema = z.object({
   stationId: z.string().min(1),
   nodeId: z.string().min(1),
 
-  korxonaNomi: z.string().min(1).default('Predpriyatie'),
-  poyezdNumber: z.string().optional().default(''),
-  ruxsatIndeksi: z.string().optional().default(''),
+  korxonaNomi: optionalText('Predpriyatie'),
+  poyezdNumber: optionalText(),
+  ruxsatIndeksi: optionalText(),
 
   qancha: decimalInput,
-  nechaSutkalik: z.union([z.string(), z.number()]).default(1),
+  nechaSutkalik: z.preprocess((v) => (v == null || v === '' ? undefined : v), z.union([z.string(), z.number()]).optional().default(1)),
 
-  buyruqNumber: z.string().optional().default(''),
-  kimTomonidan: z.string().optional().default(''),
-  buyruqVaqti: z.number().optional(),
+  buyruqNumber: optionalText(),
+  kimTomonidan: optionalText(),
+  buyruqVaqti: z.preprocess((v) => (v == null ? undefined : v), z.number().optional()),
 
-  mashinadaYetkazildi: z.boolean().optional().default(false),
-  mashinaRaqami: z.string().optional().default(''),
+  mashinadaYetkazildi: z.preprocess((v) => v ?? false, z.boolean()).default(false),
+  mashinaRaqami: optionalText(),
 
   reportDateISO: dateISOSchema,
 });
@@ -64,29 +85,29 @@ export const qurulishCreateSchema = z.object({
   stationId: z.string().min(1),
   nodeId: z.string().min(1),
 
-  korxonaNomi: z.string().optional().default(''),
-  texnikaSoni: z.union([z.string(), z.number()]).optional(),
-  obyekt: z.string().optional().default(''),
-  masulShaxs: z.string().optional().default(''),
-  lavozim: z.string().optional().default(''),
+  korxonaNomi: optionalText(),
+  texnikaSoni: numberOrText,
+  obyekt: optionalText(),
+  masulShaxs: optionalText(),
+  lavozim: optionalText(),
 
   qanchaOlindi: decimalInput,
   qanchaBerildi: decimalInput,
   dopLimit: decimalInput,
 
-  seriya: z.string().optional().default(''),
-  raqami: z.string().optional().default(''),
-  poyezdNumber: z.string().optional().default(''),
-  ruxsatIndeksi: z.string().optional().default(''),
+  seriya: optionalText(),
+  raqami: optionalText(),
+  poyezdNumber: optionalText(),
+  ruxsatIndeksi: optionalText(),
   poyezdVazni: decimalInput,
   qoldiq: decimalInput,
 
-  buyruqNumber: z.string().optional().default(''),
-  kimTomonidan: z.string().optional().default(''),
-  buyruqVaqti: z.number().optional(),
+  buyruqNumber: optionalText(),
+  kimTomonidan: optionalText(),
+  buyruqVaqti: z.preprocess((v) => (v == null ? undefined : v), z.number().optional()),
 
-  mashinadaYetkazildi: z.boolean().optional().default(false),
-  mashinaRaqami: z.string().optional().default(''),
+  mashinadaYetkazildi: z.preprocess((v) => v ?? false, z.boolean()).default(false),
+  mashinaRaqami: optionalText(),
 
   reportDateISO: dateISOSchema,
 });
@@ -103,8 +124,8 @@ export const tamirlashCreateSchema = z.object({
   dizMasla: decimalInput,
   masulShaxs: z.string().min(1),
 
-  mashinadaYetkazildi: z.boolean().optional().default(false),
-  mashinaRaqami: z.string().optional().default(''),
+  mashinadaYetkazildi: z.preprocess((v) => v ?? false, z.boolean()).default(false),
+  mashinaRaqami: optionalText(),
 
   reportDateISO: dateISOSchema,
 });

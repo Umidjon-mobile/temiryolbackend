@@ -12,7 +12,6 @@ async function bootstrap() {
   // 2. Express app
   const app = createApp();
 
-  
   // 3. HTTP server (Socket.io shu ustiga o'rnatiladi)
   const httpServer = createServer(app);
 
