@@ -10,6 +10,7 @@
     "seed": "ts-node-dev -r tsconfig-paths/register --transpile-only src/seed/index.ts",
     "seed:prod": "node dist/seed/index.js",
     "typecheck": "tsc --noEmit",
+    "test:operator": "ts-node-dev -r tsconfig-paths/register --transpile-only src/modules/operator/operator-balance.test.ts",
     "lint": "eslint . --ext .ts"
   },
   "engines": {

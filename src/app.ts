@@ -23,6 +23,7 @@ import { reportsExportRouter } from '@/modules/reports/reports-export.routes';
 import { chatRouter } from '@/modules/chat/chat.routes';
 import { rusumlarRouter } from '@/modules/rusumlar/rusumlar.routes';
 import { appSettingsRouter } from '@/modules/app-settings/app-settings.routes';
+import { operatorRouter } from '@/modules/operator/operator.routes';
 import { errorMiddleware, notFoundMiddleware } from '@/middleware/error.middleware';
 
 export function createApp(): Application {
@@ -91,6 +92,7 @@ export function createApp(): Application {
   app.use('/chat', chatRouter);
   app.use('/rusumlar', rusumlarRouter);
   app.use('/app-settings', appSettingsRouter);
+  app.use('/operator', operatorRouter);
 
   // Root
   app.get('/', (_req, res) => {

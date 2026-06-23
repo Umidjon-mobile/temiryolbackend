@@ -19,9 +19,16 @@ import {
   LokomotivSubmissionModel,
   KorxonaSubmissionModel,
   QurulishSubmissionModel,
+  DailySummaryModel,
+  YearlySummaryModel,
+  FuelRecordModel,
 } from '@/models';
+import { roundKg } from '@/common/utils/decimal';
+import { toLocalTime } from '@/common/utils/dates';
 import { logger } from '@/common/utils/logger';
 import { STATIONS } from './stations.data';
+
+const STATION_NAME = new Map(STATIONS.map((s) => [s.id, s.name]));
 
 const IMPORT_MARKER = 'excel-import';
 const DRY = process.argv.includes('--dry');
@@ -29,8 +36,9 @@ const DRY = process.argv.includes('--dry');
 // Repo ildizidagi fayllar + ularning sanasi (faylnomidagi sana)
 const ROOT = path.resolve(__dirname, '../../..');
 const FILES: Array<{ file: string; dateISO: string }> = [
-  { file: 'spr_day02.06.2026 (2) (2).xlsx', dateISO: '2026-06-02' },
-  { file: 'spr_day 03.06.2026й (3) (2).xlsx', dateISO: '2026-06-03' },
+  { file: 'spr_day02.06.2026 (3).xlsx', dateISO: '2026-06-02' },
+  { file: 'spr_day 03.06.2026й (2).xlsx', dateISO: '2026-06-03' },
+  { file: 'spr_day 04.06.2026й..xlsx', dateISO: '2026-06-04' },
 ];
 
 // ── Stansiya nomi → station lookup ────────────────────────────────
@@ -220,6 +228,196 @@ async function parseFile(file: string, dateISO: string) {
   return { docs, skipped };
 }
 
+// ── Summary qayta-qurish ──────────────────────────────────────────
+// Import to'g'ridan-to'g'ri submission kolleksiyalariga yozadi, lekin hisobotlar
+// (operativ/svod/monthly/yearly) va operator gauge oldindan hisoblangan
+// daily_summaries / yearly_summaries dan o'qiydi. Shu sababli import qilingan
+// sanalar uchun summary'larni submissions (source of truth) dan qayta quramiz.
+// Mantiq submissions.service.ts bilan bir xil:
+//   lokomotiv  → qanchaBerildi, ikki qator (harakatTuri=<turi> + null)
+//   korxona    → qancha,        null qator
+//   qurulish   → qanchaOlindi||qanchaBerildi, faqat fuel>0 bo'lsa, null qator
+//   tamirlash  → qanchaBerildi, null qator
+function fuelOf(d: Record<string, unknown>): number {
+  if (d.category === 'korxona') return Number(d.qancha) || 0;
+  if (d.category === 'qurulish') return (Number(d.qanchaOlindi) || 0) || (Number(d.qanchaBerildi) || 0);
+  return Number(d.qanchaBerildi) || 0; // lokomotiv, tamirlash
+}
+
+interface SumAcc {
+  dateISO?: string;
+  year: number;
+  stationId: string;
+  nodeId: string;
+  category: string;
+  harakatTuri: string | null;
+  totalFuelKg: number;
+  totalMaslaKg: number;
+  recordCount: number;
+}
+
+function accumulate(map: Map<string, SumAcc>, key: string, base: Omit<SumAcc, 'totalFuelKg' | 'totalMaslaKg' | 'recordCount'>, fuel: number, masla: number) {
+  const cur = map.get(key);
+  if (cur) {
+    cur.totalFuelKg += fuel;
+    cur.totalMaslaKg += masla;
+    cur.recordCount += 1;
+  } else {
+    map.set(key, { ...base, totalFuelKg: fuel, totalMaslaKg: masla, recordCount: 1 });
+  }
+}
+
+async function rebuildSummaries(dates: string[], years: number[]) {
+  // Daily — faqat import qilingan sanalar; Yearly — butun yil (source of truth dan)
+  const dailySubs = await SubmissionModel.find({ dateISO: { $in: dates } }).lean();
+  const yearlySubs = await SubmissionModel.find({ year: { $in: years } }).lean();
+
+  // ── Daily ──
+  const daily = new Map<string, SumAcc>();
+  for (const d of dailySubs as Array<Record<string, unknown>>) {
+    const cat = String(d.category);
+    const fuel = fuelOf(d);
+    const masla = Number(d.dizMasla) || 0;
+    if (cat === 'qurulish' && fuel <= 0) continue; // service summary yozmaydi
+    const dateISO = String(d.dateISO);
+    const stationId = String(d.stationId);
+    const nodeId = String(d.nodeId);
+    const harakatTuri = cat === 'lokomotiv' ? (d.harakatTuri ? String(d.harakatTuri) : null) : null;
+    const nullBase = { dateISO, year: Number(d.year), stationId, nodeId, category: cat, harakatTuri: null };
+    accumulate(daily, `${dateISO}|${stationId}|${cat}|null`, nullBase, fuel, masla);
+    if (cat === 'lokomotiv' && harakatTuri) {
+      const turiBase = { ...nullBase, harakatTuri };
+      accumulate(daily, `${dateISO}|${stationId}|${cat}|${harakatTuri}`, turiBase, fuel, masla);
+    }
+  }
+
+  // ── Yearly ──
+  const yearly = new Map<string, SumAcc>();
+  for (const d of yearlySubs as Array<Record<string, unknown>>) {
+    const cat = String(d.category);
+    const fuel = fuelOf(d);
+    const masla = Number(d.dizMasla) || 0;
+    if (cat === 'qurulish' && fuel <= 0) continue;
+    const year = Number(d.year);
+    const stationId = String(d.stationId);
+    const nodeId = String(d.nodeId);
+    const harakatTuri = cat === 'lokomotiv' ? (d.harakatTuri ? String(d.harakatTuri) : null) : null;
+    const nullBase = { year, stationId, nodeId, category: cat, harakatTuri: null };
+    accumulate(yearly, `${year}|${stationId}|${cat}|null`, nullBase, fuel, masla);
+    if (cat === 'lokomotiv' && harakatTuri) {
+      const turiBase = { ...nullBase, harakatTuri };
+      accumulate(yearly, `${year}|${stationId}|${cat}|${harakatTuri}`, turiBase, fuel, masla);
+    }
+  }
+
+  const dailyDocs = [...daily.values()].map((a) => ({
+    dateISO: a.dateISO,
+    stationId: a.stationId,
+    nodeId: a.nodeId,
+    category: a.category,
+    harakatTuri: a.harakatTuri,
+    totalFuelKg: roundKg(a.totalFuelKg),
+    totalMaslaKg: roundKg(a.totalMaslaKg),
+    recordCount: a.recordCount,
+  }));
+  const yearlyDocs = [...yearly.values()].map((a) => ({
+    year: a.year,
+    stationId: a.stationId,
+    nodeId: a.nodeId,
+    category: a.category,
+    harakatTuri: a.harakatTuri,
+    totalFuelKg: roundKg(a.totalFuelKg),
+    totalMaslaKg: roundKg(a.totalMaslaKg),
+    recordCount: a.recordCount,
+  }));
+
+  const delD = await DailySummaryModel.deleteMany({ dateISO: { $in: dates } });
+  const delY = await YearlySummaryModel.deleteMany({ year: { $in: years } });
+  if (dailyDocs.length) await DailySummaryModel.insertMany(dailyDocs, { ordered: false });
+  if (yearlyDocs.length) await YearlySummaryModel.insertMany(yearlyDocs, { ordered: false });
+
+  logger.success(
+    `✓ Summary qayta qurildi — daily: -${delD.deletedCount}/+${dailyDocs.length}, yearly: -${delY.deletedCount}/+${yearlyDocs.length}`,
+  );
+}
+
+// ── FuelRecord qayta-qurish ───────────────────────────────────────
+// Hisobotlar/PDF (Y.PDF, ERJU) sahifasi `/fuel-records` endpointidan o'qiydi.
+// Import submission yozadi, lekin fuel_records ni emas — shu sababli import qilingan
+// sanalar uchun fuel_records ni submissions (source of truth) dan qayta quramiz.
+// Mantiq fuel-records.service.ts (writeFuelRecord) bilan bir xil.
+async function rebuildFuelRecords(dates: string[]) {
+  const subs = await SubmissionModel.find({ dateISO: { $in: dates } }).lean();
+  const docs: Record<string, unknown>[] = [];
+
+  for (const d of subs as Array<Record<string, unknown>>) {
+    const cat = String(d.category);
+    const fuelKg = fuelOf(d);
+    if (!fuelKg || fuelKg <= 0) continue; // writeFuelRecord fuel<=0 da yozmaydi
+
+    const stationId = String(d.stationId);
+    const timestamp = Number(d.timestamp);
+    const maslaKg = Number(d.dizMasla) || 0;
+
+    let moveType = cat;
+    let locoSeries = '';
+    let locoCode = '';
+    let locoNumber = '';
+    let weightNum = 0;
+    let balanceNum = 0;
+    const trainIndex = String(d.ruxsatIndeksi ?? '');
+
+    if (cat === 'lokomotiv') {
+      moveType = String(d.harakatTuri ?? 'lokomotiv');
+      locoSeries = String(d.rusumi ?? '');
+      locoCode = String(d.lokomotivNumber ?? '');
+      if (d.harakatTuri === 'manyovr') locoNumber = String(d.stansiya ?? '');
+      else if (d.harakatTuri === 'xojalik') locoNumber = String(d.tashkilot ?? '');
+      else if (d.harakatTuri === 'ijara') locoNumber = String(d.ijarachi ?? '');
+      else locoNumber = String(d.poyezdNumber ?? '');
+      weightNum = Number(d.poyezdVazni) || 0;
+      balanceNum = Number(d.qoldiq) || 0;
+    } else if (cat === 'korxona') {
+      locoNumber = String(d.poyezdNumber ?? '');
+    } else if (cat === 'qurulish') {
+      locoSeries = String(d.seriya ?? '');
+      locoCode = String(d.raqami ?? '');
+      weightNum = Number(d.poyezdVazni) || 0;
+      balanceNum = Number(d.qoldiq) || 0;
+    }
+
+    docs.push({
+      submissionId: String(d._id),
+      category: cat,
+      dateISO: String(d.dateISO),
+      year: Number(d.year),
+      time: toLocalTime(timestamp),
+      timestamp,
+      supplyPoint: STATION_NAME.get(stationId) ?? stationId,
+      stationId,
+      locCode: stationId,
+      nodeId: String(d.nodeId),
+      staffCode: String(d.staffCode ?? ''),
+      staffName: String(d.staffName ?? ''),
+      moveType,
+      locoSeries,
+      locoCode,
+      locoNumber,
+      trainIndex,
+      weight: weightNum > 0 ? String(weightNum) : '',
+      balanceBefore: balanceNum === 0 ? '' : String(balanceNum),
+      fuelAmount: String(fuelKg),
+      maslaAmount: maslaKg > 0 ? String(maslaKg) : '',
+      fuelAmountKg: fuelKg,
+      maslaAmountKg: maslaKg,
+    });
+  }
+
+  const del = await FuelRecordModel.deleteMany({ dateISO: { $in: dates } });
+  if (docs.length) await FuelRecordModel.insertMany(docs, { ordered: false });
+  logger.success(`✓ FuelRecord qayta qurildi — -${del.deletedCount}/+${docs.length}`);
+}
+
 async function main() {
   logger.info(`Excel import boshlandi ${DRY ? '(DRY — yozilmaydi)' : ''}`);
 
@@ -249,11 +447,8 @@ async function main() {
 
   await connectDB();
 
-  // Idempotentlik: avvalgi import yozuvlarini shu sanalar uchun o'chiramiz
-  const del = await SubmissionModel.deleteMany({
-    editedBy: IMPORT_MARKER,
-    dateISO: { $in: [...dates] },
-  });
+  // Idempotentlik: avvalgi BARCHA import yozuvlarini o'chiramiz (sanasidan qat'i nazar)
+  const del = await SubmissionModel.deleteMany({ editedBy: IMPORT_MARKER });
   logger.info(`Eski import yozuvlari o'chirildi: ${del.deletedCount}`);
 
   const lok = all.filter((d) => d.category === 'lokomotiv');
@@ -267,6 +462,11 @@ async function main() {
   logger.success(
     `✓ Yozildi — lokomotiv: ${lok.length}, korxona: ${kor.length}, qurulish: ${qur.length}`,
   );
+
+  // Hisobotlar/gauge oldindan hisoblangan summary'dan o'qiydi — qayta quramiz
+  const years = [...new Set([...dates].map((d) => Number(d.split('-')[0])))];
+  await rebuildSummaries([...dates], years);
+  await rebuildFuelRecords([...dates]);
 
   await disconnectDB();
 }

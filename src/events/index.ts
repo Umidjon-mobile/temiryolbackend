@@ -23,6 +23,9 @@ export const ServerEvents = {
   BLOCKED_CODES_UPDATED: 'blocked-codes.updated',
   RUSUMLAR_UPDATED: 'rusumlar.updated',
   LIMITS_UPDATED: 'limits.updated',
+
+  // Operator balans
+  OPERATOR_BALANCE_UPDATED: 'operator.balance.updated',
 } as const;
 
 export const ClientEvents = {

@@ -14,6 +14,11 @@ import { env } from '@/config/env';
 import { logger } from '@/common/utils/logger';
 import { writeFuelRecord, deleteFuelRecordBySubmission } from '@/modules/fuel-records/fuel-records.service';
 import { summariesService } from '@/modules/summaries/summaries.service';
+import {
+  safeApplyConsumption,
+  safeApplyReverse,
+  safeApplyEdit,
+} from '@/modules/operator/operator-balance.service';
 import { broadcastSubmissionChange } from '@/config/socket';
 import type {
   LokomotivCreateInput,
@@ -188,6 +193,14 @@ class SubmissionsService {
       return submissionId;
     });
 
+    // Operator balans — berildi zaxiradan ayiriladi (xato yutiladi)
+    await safeApplyConsumption(input.stationId, input.nodeId, qanchaBerildi, {
+      submissionId: id,
+      category: 'lokomotiv',
+      by: user.code,
+      byName: user.displayName,
+    });
+
     // Realtime broadcast
     broadcastSubmissionChange('created', {
       id,
@@ -312,6 +325,13 @@ class SubmissionsService {
       return submissionId;
     });
 
+    await safeApplyConsumption(input.stationId, input.nodeId, qancha, {
+      submissionId: id,
+      category: 'korxona',
+      by: user.code,
+      byName: user.displayName,
+    });
+
     broadcastSubmissionChange('created', {
       id,
       category: 'korxona',
@@ -432,6 +452,15 @@ class SubmissionsService {
       return submissionId;
     });
 
+    if (fuelAmount > 0) {
+      await safeApplyConsumption(input.stationId, input.nodeId, fuelAmount, {
+        submissionId: id,
+        category: 'qurulish',
+        by: user.code,
+        byName: user.displayName,
+      });
+    }
+
     broadcastSubmissionChange('created', {
       id,
       category: 'qurulish',
@@ -529,6 +558,13 @@ class SubmissionsService {
       return submissionId;
     });
 
+    await safeApplyConsumption(input.stationId, input.nodeId, qanchaBerildi, {
+      submissionId: id,
+      category: 'tamirlash',
+      by: user.code,
+      byName: user.displayName,
+    });
+
     broadcastSubmissionChange('created', {
       id,
       category: 'tamirlash',
@@ -615,6 +651,7 @@ class SubmissionsService {
     const cat = existing.category as Category;
     const oldFuel = this.extractFuelKg(existing as Record<string, unknown>, cat);
     const oldMasla = this.extractMaslaKg(existing as Record<string, unknown>, cat);
+    let newFuelKgFinal = oldFuel; // transaction tashqarisida operator balansiga ishlatamiz
 
     // Numeric maydonlarni decimal qilib normallashtirish
     const decimalFields = ['qanchaBerildi', 'qancha', 'qanchaOlindi', 'dizMasla', 'qoldiq', 'poyezdVazni'];
@@ -642,6 +679,7 @@ class SubmissionsService {
 
       const newFuel = this.extractFuelKg(updated as Record<string, unknown>, cat);
       const newMasla = this.extractMaslaKg(updated as Record<string, unknown>, cat);
+      newFuelKgFinal = newFuel;
 
       // Summaries delta
       if (oldFuel !== newFuel || oldMasla !== newMasla) {
@@ -705,6 +743,16 @@ class SubmissionsService {
         );
       }
     });
+
+    // Operator balans — kg farqi (xato yutiladi). Import yozuvlariga tegmaymiz.
+    if ((existing as { editedBy?: string }).editedBy !== 'excel-import') {
+      await safeApplyEdit(existing.stationId, existing.nodeId, oldFuel, newFuelKgFinal, {
+        submissionId: id,
+        category: cat,
+        by: user.code,
+        byName: user.displayName,
+      });
+    }
 
     broadcastSubmissionChange('updated', {
       id,
@@ -773,6 +821,16 @@ class SubmissionsService {
         );
       }
     });
+
+    // Operator balans — o'chirilgan yozuvning yoqilg'isi zaxiraga qaytadi
+    if ((existing as { editedBy?: string }).editedBy !== 'excel-import') {
+      await safeApplyReverse(existing.stationId, existing.nodeId, oldFuel, {
+        submissionId: id,
+        category: cat,
+        by: user.code,
+        byName: user.displayName,
+      });
+    }
 
     broadcastSubmissionChange('deleted', {
       id,

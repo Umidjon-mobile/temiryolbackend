@@ -20,6 +20,7 @@ export { LimitsSettingsModel } from './LimitsSettings';
 export { ChatMessageModel } from './ChatMessage';
 export { LocomotiveSeriesModel } from './LocomotiveSeries';
 export { AppSettingsModel } from './AppSettings';
+export { OperatorBalanceModel, OperatorLedgerModel } from './OperatorBalance';
 
 export type { NodeDoc } from './Node';
 export type { StationDoc } from './Station';
@@ -36,3 +37,4 @@ export type { ApprovalDoc } from './Approval';
 export type { LimitsSettingsDoc } from './LimitsSettings';
 export type { ChatMessageDoc } from './ChatMessage';
 export type { LocomotiveSeriesDoc } from './LocomotiveSeries';
+export type { OperatorBalanceDoc, OperatorLedgerDoc } from './OperatorBalance';

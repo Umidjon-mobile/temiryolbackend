@@ -123,3 +123,16 @@ export function broadcastSubmissionChange(
     io.to(Rooms.node(data.nodeId)).emit(eventName, data);
   }
 }
+
+/** Operator balansi o'zgarganda admin + zapravka room larga e'lon */
+export function broadcastBalanceChange(
+  stationId: string,
+  nodeId: string | null | undefined,
+  payload: Record<string, unknown>,
+): void {
+  if (!io) return; // socket hali ishga tushmagan bo'lishi mumkin (masalan import)
+  const event = ServerEvents.OPERATOR_BALANCE_UPDATED;
+  io.to(Rooms.station(stationId)).emit(event, payload);
+  io.to(Rooms.admin).emit(event, payload);
+  if (nodeId) io.to(Rooms.node(nodeId)).emit(event, payload);
+}
